@@ -61,14 +61,14 @@ function generatePlayer(username, isHost = false) {
         ready: false,
         isHost,
         revealed: {
-            profession: isHost,
-            health: isHost,
-            biology: isHost,
-            hobby: isHost,
-            luggage: isHost,
-            phobia: isHost,
-            character: isHost,
-            additionalInfo: isHost
+            profession: false,  // ИЗМЕНИЛ: было isHost, теперь false
+            health: false,      // ИЗМЕНИЛ: было isHost, теперь false
+            biology: false,     // ИЗМЕНИЛ: было isHost, теперь false
+            hobby: false,       // ИЗМЕНИЛ: было isHost, теперь false
+            luggage: false,     // ИЗМЕНИЛ: было isHost, теперь false
+            phobia: false,      // ИЗМЕНИЛ: было isHost, теперь false
+            character: false,   // ИЗМЕНИЛ: было isHost, теперь false
+            additionalInfo: false // ИЗМЕНИЛ: было isHost, теперь false
         },
         vote: null
     };
@@ -332,4 +332,5 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`Сервер запущен на порту ${PORT}`);
+
 });
