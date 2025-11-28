@@ -79,300 +79,344 @@ io.on('connection', (socket) => {
     console.log('Новый игрок:', socket.id);
 
     socket.on('create_room', (username) => {
-        const roomCode = generateRoomCode();
-        
-        const player = generatePlayer(username, true);
-        player.socketId = socket.id;
-        player.roomCode = roomCode;
-        
-        const room = {
-            code: roomCode,
-            players: [player],
-            host: player.id,
-            gameStarted: false,
-            currentSituation: 0,
-            currentRound: 1
-        };
-        
-        rooms.set(roomCode, room);
-        players.set(socket.id, player);
-        socket.join(roomCode);
-        
-        socket.emit('room_created', {
-            roomCode,
-            playerId: player.id
-        });
+        try {
+            const roomCode = generateRoomCode();
+            
+            const player = generatePlayer(username, true);
+            player.socketId = socket.id;
+            player.roomCode = roomCode;
+            
+            const room = {
+                code: roomCode,
+                players: [player],
+                host: player.id,
+                gameStarted: false,
+                currentSituation: 0,
+                currentRound: 1
+            };
+            
+            rooms.set(roomCode, room);
+            players.set(socket.id, player);
+            socket.join(roomCode);
+            
+            socket.emit('room_created', {
+                roomCode,
+                playerId: player.id
+            });
 
-        io.to(roomCode).emit('players_update', room.players);
-        
-        console.log(`Room created: ${roomCode} by ${username}`);
+            io.to(roomCode).emit('players_update', room.players);
+            
+            console.log(`✅ Room created: ${roomCode} by ${username}, players:`, room.players.map(p => p.username));
+        } catch (error) {
+            console.error('Error creating room:', error);
+            socket.emit('error', { message: 'Ошибка создания комнаты' });
+        }
     });
 
     socket.on('join_room', (data) => {
-        const { roomCode, username } = data;
-        const room = rooms.get(roomCode);
-        
-        if (!room) {
-            socket.emit('error', { message: 'Комната не найдена' });
-            return;
-        }
-        
-        if (room.gameStarted) {
-            socket.emit('error', { message: 'Игра уже началась' });
-            return;
-        }
-        
-        const player = generatePlayer(username, false);
-        player.socketId = socket.id;
-        player.roomCode = roomCode;
-        
-        room.players.push(player);
-        players.set(socket.id, player);
-        socket.join(roomCode);
-        
-        io.to(roomCode).emit('player_joined', {
-            username: player.username
-        });
+        try {
+            const { roomCode, username } = data;
+            const room = rooms.get(roomCode);
+            
+            if (!room) {
+                socket.emit('error', { message: 'Комната не найдена' });
+                return;
+            }
+            
+            if (room.gameStarted) {
+                socket.emit('error', { message: 'Игра уже началась' });
+                return;
+            }
+            
+            // Проверяем, нет ли уже игрока с таким именем
+            const existingPlayer = room.players.find(p => p.username === username);
+            if (existingPlayer) {
+                socket.emit('error', { message: 'Игрок с таким именем уже есть в комнате' });
+                return;
+            }
+            
+            const player = generatePlayer(username, false);
+            player.socketId = socket.id;
+            player.roomCode = roomCode;
+            
+            room.players.push(player);
+            players.set(socket.id, player);
+            socket.join(roomCode);
+            
+            io.to(roomCode).emit('player_joined', {
+                username: player.username
+            });
 
-        io.to(roomCode).emit('players_update', room.players);
-        
-        socket.emit('room_joined', {
-            roomCode: roomCode,
-            playerId: player.id
-        });
-        
-        console.log(`Player ${username} joined room ${roomCode}`);
+            io.to(roomCode).emit('players_update', room.players);
+            
+            socket.emit('room_joined', {
+                roomCode: roomCode,
+                playerId: player.id
+            });
+            
+            console.log(`✅ Player ${username} joined room ${roomCode}, total players:`, room.players.length);
+        } catch (error) {
+            console.error('Error joining room:', error);
+            socket.emit('error', { message: 'Ошибка присоединения к комнате' });
+        }
     });
 
     socket.on('toggle_ready', () => {
-        const player = players.get(socket.id);
-        if (!player) return;
-        
-        const room = rooms.get(player.roomCode);
-        if (!room) return;
-        
-        player.ready = !player.ready;
-        
-        io.to(room.code).emit('players_update', room.players);
+        try {
+            const player = players.get(socket.id);
+            if (!player) {
+                socket.emit('error', { message: 'Игрок не найден' });
+                return;
+            }
+            
+            const room = rooms.get(player.roomCode);
+            if (!room) {
+                socket.emit('error', { message: 'Комната не найдена' });
+                return;
+            }
+            
+            player.ready = !player.ready;
+            
+            console.log(`🔄 Player ${player.username} ready: ${player.ready}`);
+            
+            io.to(room.code).emit('players_update', room.players);
+        } catch (error) {
+            console.error('Error toggling ready:', error);
+            socket.emit('error', { message: 'Ошибка изменения статуса готовности' });
+        }
     });
 
     socket.on('reveal_attribute', (data) => {
-        const player = players.get(socket.id);
-        if (!player) return;
-        
-        const room = rooms.get(player.roomCode);
-        if (!room) return;
-        
-        // Проверяем, можно ли раскрывать эту характеристику в текущем круге
-        const roundAttributes = getRoundAttributes(room.currentRound);
-        if (!roundAttributes.includes(data.attribute)) {
-            socket.emit('error', { message: 'Эту характеристику нельзя раскрыть в текущем круге' });
-            return;
-        }
-        
-        player.revealed[data.attribute] = true;
-        
-        io.to(room.code).emit('attribute_revealed', {
-            playerId: player.id,
-            attribute: data.attribute
-        });
+        try {
+            const player = players.get(socket.id);
+            if (!player) return;
+            
+            const room = rooms.get(player.roomCode);
+            if (!room) return;
+            
+            player.revealed[data.attribute] = true;
+            
+            io.to(room.code).emit('attribute_revealed', {
+                playerId: player.id,
+                attribute: data.attribute
+            });
 
-        io.to(room.code).emit('players_update', room.players);
+            io.to(room.code).emit('players_update', room.players);
+        } catch (error) {
+            console.error('Error revealing attribute:', error);
+            socket.emit('error', { message: 'Ошибка раскрытия характеристики' });
+        }
     });
 
     socket.on('start_game', () => {
-        const player = players.get(socket.id);
-        if (!player) return;
-        
-        const room = rooms.get(player.roomCode);
-        if (!room || room.host !== player.id) return;
-        
-        const allReady = room.players.every(p => p.ready);
-        const minPlayers = room.players.length >= 3;
-        
-        if (!allReady || !minPlayers) {
-            socket.emit('error', { message: 'Не все игроки готовы или недостаточно игроков (минимум 3)' });
-            return;
+        try {
+            console.log('🚀 Received start_game request from socket:', socket.id);
+            
+            const player = players.get(socket.id);
+            if (!player) {
+                console.log('❌ Player not found for socket:', socket.id);
+                socket.emit('error', { message: 'Игрок не найден' });
+                return;
+            }
+            
+            const room = rooms.get(player.roomCode);
+            if (!room) {
+                console.log('❌ Room not found for player:', player.username);
+                socket.emit('error', { message: 'Комната не найдена' });
+                return;
+            }
+            
+            console.log('🔍 Checking permissions:', {
+                playerId: player.id,
+                hostId: room.host,
+                isHost: player.id === room.host,
+                playerUsername: player.username
+            });
+            
+            // Проверяем, является ли игрок хостом
+            if (room.host !== player.id) {
+                console.log('❌ Player is not host:', player.username);
+                socket.emit('error', { message: 'Только создатель комнаты может начать игру' });
+                return;
+            }
+            
+            // Проверяем, все ли игроки готовы
+            const allReady = room.players.every(p => p.ready);
+            const minPlayers = room.players.length >= 3;
+            
+            console.log('📊 Game start conditions:', {
+                allReady,
+                minPlayers,
+                playersCount: room.players.length,
+                players: room.players.map(p => ({ username: p.username, ready: p.ready }))
+            });
+            
+            if (!allReady) {
+                const notReadyPlayers = room.players.filter(p => !p.ready).map(p => p.username);
+                socket.emit('error', { message: `Не все игроки готовы: ${notReadyPlayers.join(', ')}` });
+                return;
+            }
+            
+            if (!minPlayers) {
+                socket.emit('error', { message: 'Недостаточно игроков для начала игры (минимум 3)' });
+                return;
+            }
+            
+            // Запускаем игру
+            room.gameStarted = true;
+            room.currentRound = 1;
+            
+            console.log(`🎮 Game started in room ${room.code} with ${room.players.length} players`);
+            
+            io.to(room.code).emit('game_started');
+        } catch (error) {
+            console.error('❌ Error starting game:', error);
+            socket.emit('error', { message: 'Ошибка запуска игры' });
         }
-        
-        room.gameStarted = true;
-        room.currentRound = 1;
-        
-        io.to(room.code).emit('game_started');
-        console.log(`Game started in room ${room.code}`);
     });
 
     socket.on('next_round', () => {
-        const player = players.get(socket.id);
-        if (!player) return;
-        
-        const room = rooms.get(player.roomCode);
-        if (!room || room.host !== player.id || !room.gameStarted) return;
-        
-        // Проверяем, не превышен ли лимит кругов
-        if (room.currentRound >= 5) {
-            socket.emit('error', { message: 'Достигнут максимальный номер круга' });
-            return;
+        try {
+            const player = players.get(socket.id);
+            if (!player) return;
+            
+            const room = rooms.get(player.roomCode);
+            if (!room || !room.gameStarted) return;
+            
+            // Проверяем, является ли игрок хостом
+            if (room.host !== player.id) {
+                socket.emit('error', { message: 'Только создатель комнаты может переходить к следующему кругу' });
+                return;
+            }
+            
+            room.currentRound++;
+            
+            console.log(`🔄 Round ${room.currentRound} started in room ${room.code}`);
+            
+            io.to(room.code).emit('next_round', {
+                round: room.currentRound
+            });
+        } catch (error) {
+            console.error('Error starting next round:', error);
+            socket.emit('error', { message: 'Ошибка перехода к следующему кругу' });
         }
-        
-        room.currentRound++;
-        
-        console.log(`Round ${room.currentRound} started in room ${room.code}`);
-        
-        io.to(room.code).emit('next_round', {
-            round: room.currentRound
-        });
     });
 
     socket.on('chat_message', (data) => {
-        const player = players.get(socket.id);
-        if (!player) return;
-        
-        const room = rooms.get(player.roomCode);
-        if (!room) return;
-        
-        io.to(room.code).emit('chat_message', {
-            username: player.username,
-            message: data.message,
-            context: data.context
-        });
+        try {
+            const player = players.get(socket.id);
+            if (!player) return;
+            
+            const room = rooms.get(player.roomCode);
+            if (!room) return;
+            
+            io.to(room.code).emit('chat_message', {
+                username: player.username,
+                message: data.message,
+                context: data.context
+            });
+        } catch (error) {
+            console.error('Error sending chat message:', error);
+        }
     });
 
     socket.on('cast_vote', (data) => {
-        const player = players.get(socket.id);
-        if (!player) return;
-        
-        const room = rooms.get(player.roomCode);
-        if (!room) return;
-        
-        player.vote = data.targetPlayerId;
-        
-        io.to(room.code).emit('player_voted', {
-            playerId: player.id,
-            targetPlayerId: data.targetPlayerId
-        });
-
-        // Проверяем, все ли проголосовали
-        checkVotingCompletion(room);
+        try {
+            const player = players.get(socket.id);
+            if (!player) return;
+            
+            const room = rooms.get(player.roomCode);
+            if (!room) return;
+            
+            player.vote = data.targetPlayerId;
+            
+            io.to(room.code).emit('player_voted', {
+                playerId: player.id,
+                targetPlayerId: data.targetPlayerId
+            });
+        } catch (error) {
+            console.error('Error casting vote:', error);
+            socket.emit('error', { message: 'Ошибка голосования' });
+        }
     });
 
     socket.on('leave_room', () => {
-        const player = players.get(socket.id);
-        if (!player) return;
-        
-        const room = rooms.get(player.roomCode);
-        if (!room) return;
-        
-        room.players = room.players.filter(p => p.id !== player.id);
-        players.delete(socket.id);
-        
-        if (room.players.length === 0) {
-            rooms.delete(room.code);
-            console.log(`Room ${room.code} deleted (no players left)`);
-        } else {
-            if (room.host === player.id) {
-                room.host = room.players[0].id;
-                room.players[0].isHost = true;
+        try {
+            const player = players.get(socket.id);
+            if (!player) return;
+            
+            const room = rooms.get(player.roomCode);
+            if (!room) return;
+            
+            const playerUsername = player.username;
+            
+            room.players = room.players.filter(p => p.id !== player.id);
+            players.delete(socket.id);
+            
+            if (room.players.length === 0) {
+                rooms.delete(room.code);
+                console.log(`🗑️ Room ${room.code} deleted (no players left)`);
+            } else {
+                if (room.host === player.id) {
+                    room.host = room.players[0].id;
+                    room.players[0].isHost = true;
+                    console.log(`👑 New host assigned: ${room.players[0].username}`);
+                }
+                
+                io.to(room.code).emit('player_left', {
+                    username: playerUsername
+                });
+
+                io.to(room.code).emit('players_update', room.players);
+                console.log(`👋 Player ${playerUsername} left room ${room.code}, remaining: ${room.players.length}`);
             }
             
-            io.to(room.code).emit('player_left', {
-                username: player.username
-            });
-
-            io.to(room.code).emit('players_update', room.players);
-            console.log(`Player ${player.username} left room ${room.code}`);
+            socket.leave(room.code);
+        } catch (error) {
+            console.error('Error leaving room:', error);
         }
-        
-        socket.leave(room.code);
     });
 
     socket.on('disconnect', () => {
-        console.log('Игрок отключился:', socket.id);
-        
-        const player = players.get(socket.id);
-        if (!player) return;
-        
-        const room = rooms.get(player.roomCode);
-        if (!room) return;
-        
-        room.players = room.players.filter(p => p.id !== player.id);
-        players.delete(socket.id);
-        
-        if (room.players.length === 0) {
-            rooms.delete(room.code);
-            console.log(`Room ${room.code} deleted (no players left)`);
-        } else {
-            if (room.host === player.id) {
-                room.host = room.players[0].id;
-                room.players[0].isHost = true;
-            }
+        try {
+            console.log('🔌 Player disconnected:', socket.id);
             
-            io.to(room.code).emit('player_left', {
-                username: player.username
-            });
+            const player = players.get(socket.id);
+            if (!player) return;
+            
+            const room = rooms.get(player.roomCode);
+            if (!room) return;
+            
+            const playerUsername = player.username;
+            
+            room.players = room.players.filter(p => p.id !== player.id);
+            players.delete(socket.id);
+            
+            if (room.players.length === 0) {
+                rooms.delete(room.code);
+                console.log(`🗑️ Room ${room.code} deleted (no players left after disconnect)`);
+            } else {
+                if (room.host === player.id) {
+                    room.host = room.players[0].id;
+                    room.players[0].isHost = true;
+                    console.log(`👑 New host assigned after disconnect: ${room.players[0].username}`);
+                }
+                
+                io.to(room.code).emit('player_left', {
+                    username: playerUsername
+                });
 
-            io.to(room.code).emit('players_update', room.players);
-            console.log(`Player ${player.username} disconnected from room ${room.code}`);
+                io.to(room.code).emit('players_update', room.players);
+                console.log(`👋 Player ${playerUsername} disconnected from room ${room.code}, remaining: ${room.players.length}`);
+            }
+        } catch (error) {
+            console.error('Error handling disconnect:', error);
         }
     });
 });
 
-// Вспомогательные функции
-function getRoundAttributes(round) {
-    const roundAttributes = {
-        1: ['profession'],
-        2: ['health', 'biology'],
-        3: ['hobby', 'luggage'],
-        4: ['phobia', 'character'],
-        5: ['additionalInfo']
-    };
-    return roundAttributes[round] || [];
-}
-
-function checkVotingCompletion(room) {
-    const allVoted = room.players.every(player => player.vote !== null);
-    if (allVoted) {
-        // Подсчитываем голоса
-        const voteCount = {};
-        room.players.forEach(player => {
-            if (player.vote) {
-                voteCount[player.vote] = (voteCount[player.vote] || 0) + 1;
-            }
-        });
-        
-        // Находим игрока с наибольшим количеством голосов
-        let maxVotes = 0;
-        let eliminatedPlayerId = null;
-        
-        Object.entries(voteCount).forEach(([playerId, votes]) => {
-            if (votes > maxVotes) {
-                maxVotes = votes;
-                eliminatedPlayerId = playerId;
-            }
-        });
-        
-        if (eliminatedPlayerId) {
-            const eliminatedPlayer = room.players.find(p => p.id === eliminatedPlayerId);
-            io.to(room.code).emit('player_eliminated', {
-                playerId: eliminatedPlayerId,
-                username: eliminatedPlayer.username,
-                voteCount: maxVotes
-            });
-            
-            // Удаляем игрока из комнаты
-            room.players = room.players.filter(p => p.id !== eliminatedPlayerId);
-            
-            // Сбрасываем голоса для следующего раунда
-            room.players.forEach(player => {
-                player.vote = null;
-            });
-            
-            io.to(room.code).emit('players_update', room.players);
-        }
-    }
-}
-
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`Сервер запущен на порту ${PORT}`);
+    console.log(`🎯 Server running on port ${PORT}`);
+    console.log(`📊 Current rooms: ${rooms.size}`);
 });
