@@ -102,7 +102,6 @@ io.on('connection', (socket) => {
             playerId: player.id
         });
 
-        // Отправляем обновленный список игроков
         io.to(roomCode).emit('players_update', room.players);
         
         console.log(`Room created: ${roomCode} by ${username}`);
@@ -130,15 +129,12 @@ io.on('connection', (socket) => {
         players.set(socket.id, player);
         socket.join(roomCode);
         
-        // Уведомляем всех в комнате о новом игроке
         io.to(roomCode).emit('player_joined', {
             username: player.username
         });
 
-        // Отправляем обновленный список игроков
         io.to(roomCode).emit('players_update', room.players);
         
-        // Отправляем данные новому игроку
         socket.emit('room_joined', {
             roomCode: roomCode,
             playerId: player.id
@@ -156,7 +152,6 @@ io.on('connection', (socket) => {
         
         player.ready = !player.ready;
         
-        // Отправляем обновленный список игроков
         io.to(room.code).emit('players_update', room.players);
     });
 
@@ -182,7 +177,6 @@ io.on('connection', (socket) => {
         const room = rooms.get(player.roomCode);
         if (!room || room.host !== player.id) return;
         
-        // Проверяем, что все готовы и минимум 3 игрока
         const allReady = room.players.every(p => p.ready);
         const minPlayers = room.players.length >= 3;
         
@@ -220,53 +214,7 @@ io.on('connection', (socket) => {
             playerId: player.id,
             targetPlayerId: data.targetPlayerId
         });
-        
-        // Проверяем, все ли проголосовали
-        const allVoted = room.players.every(p => p.vote !== null);
-        if (allVoted) {
-            processVotes(room);
-        }
     });
-
-    function processVotes(room) {
-        const voteCount = {};
-        room.players.forEach(player => {
-            if (player.vote) {
-                voteCount[player.vote] = (voteCount[player.vote] || 0) + 1;
-            }
-        });
-        
-        // Находим игрока с наибольшим количеством голосов
-        let eliminatedPlayerId = null;
-        let maxVotes = 0;
-        
-        Object.entries(voteCount).forEach(([playerId, votes]) => {
-            if (votes > maxVotes) {
-                maxVotes = votes;
-                eliminatedPlayerId = playerId;
-            }
-        });
-        
-        if (eliminatedPlayerId) {
-            const eliminatedPlayer = room.players.find(p => p.id === eliminatedPlayerId);
-            room.players = room.players.filter(p => p.id !== eliminatedPlayerId);
-            
-            // Сбрасываем голоса
-            room.players.forEach(p => p.vote = null);
-            
-            io.to(room.code).emit('player_eliminated', {
-                playerId: eliminatedPlayerId,
-                username: eliminatedPlayer.username
-            });
-            
-            // Проверяем окончание игры
-            if (room.players.length <= 3) {
-                io.to(room.code).emit('game_ended', {
-                    survivors: room.players.map(p => p.username)
-                });
-            }
-        }
-    }
 
     socket.on('leave_room', () => {
         const player = players.get(socket.id);
@@ -275,26 +223,21 @@ io.on('connection', (socket) => {
         const room = rooms.get(player.roomCode);
         if (!room) return;
         
-        // Удаляем игрока из комнаты
         room.players = room.players.filter(p => p.id !== player.id);
         players.delete(socket.id);
         
-        // Если комната пустая, удаляем её
         if (room.players.length === 0) {
             rooms.delete(room.code);
         } else {
-            // Если вышел хост, назначаем нового
             if (room.host === player.id) {
                 room.host = room.players[0].id;
                 room.players[0].isHost = true;
             }
             
-            // Уведомляем остальных игроков
             io.to(room.code).emit('player_left', {
                 username: player.username
             });
 
-            // Отправляем обновленный список игроков
             io.to(room.code).emit('players_update', room.players);
         }
         
@@ -310,26 +253,21 @@ io.on('connection', (socket) => {
         const room = rooms.get(player.roomCode);
         if (!room) return;
         
-        // Удаляем игрока из комнаты
         room.players = room.players.filter(p => p.id !== player.id);
         players.delete(socket.id);
         
-        // Если комната пустая, удаляем её
         if (room.players.length === 0) {
             rooms.delete(room.code);
         } else {
-            // Если вышел хост, назначаем нового
             if (room.host === player.id) {
                 room.host = room.players[0].id;
                 room.players[0].isHost = true;
             }
             
-            // Уведомляем остальных игроков
             io.to(room.code).emit('player_left', {
                 username: player.username
             });
 
-            // Отправляем обновленный список игроков
             io.to(room.code).emit('players_update', room.players);
         }
     });
