@@ -90,7 +90,8 @@ io.on('connection', (socket) => {
             players: [player],
             host: player.id,
             gameStarted: false,
-            currentSituation: 0
+            currentSituation: 0,
+            currentRound: 1
         };
         
         rooms.set(roomCode, room);
@@ -183,8 +184,21 @@ io.on('connection', (socket) => {
         if (!allReady || !minPlayers) return;
         
         room.gameStarted = true;
+        room.currentRound = 1;
         
         io.to(room.code).emit('game_started');
+    });
+
+    socket.on('next_round', () => {
+        const player = players.get(socket.id);
+        if (!player) return;
+        
+        const room = rooms.get(player.roomCode);
+        if (!room || room.host !== player.id) return;
+        
+        room.currentRound++;
+        
+        io.to(room.code).emit('next_round');
     });
 
     socket.on('chat_message', (data) => {
