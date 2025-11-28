@@ -138,6 +138,12 @@ io.on('connection', (socket) => {
         // Отправляем обновленный список игроков
         io.to(roomCode).emit('players_update', room.players);
         
+        // Отправляем данные новому игроку
+        socket.emit('room_joined', {
+            roomCode: roomCode,
+            playerId: player.id
+        });
+        
         console.log(`Player ${username} joined room ${roomCode}`);
     });
 
@@ -332,6 +338,4 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`Сервер запущен на порту ${PORT}`);
-
 });
-
