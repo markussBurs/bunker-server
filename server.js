@@ -91,8 +91,8 @@ io.on('connection', (socket) => {
                 players: [player],
                 host: player.id,
                 gameStarted: false,
-                currentSituation: 0,
-                currentRound: 1
+                currentRound: 1,
+                voting: false
             };
             
             rooms.set(roomCode, room);
@@ -106,7 +106,7 @@ io.on('connection', (socket) => {
 
             io.to(roomCode).emit('players_update', room.players);
             
-            console.log(`✅ Room created: ${roomCode} by ${username}, players:`, room.players.map(p => p.username));
+            console.log(`✅ Room created: ${roomCode} by ${username}`);
         } catch (error) {
             console.error('Error creating room:', error);
             socket.emit('error', { message: 'Ошибка создания комнаты' });
@@ -154,7 +154,7 @@ io.on('connection', (socket) => {
                 playerId: player.id
             });
             
-            console.log(`✅ Player ${username} joined room ${roomCode}, total players:`, room.players.length);
+            console.log(`✅ Player ${username} joined room ${roomCode}`);
         } catch (error) {
             console.error('Error joining room:', error);
             socket.emit('error', { message: 'Ошибка присоединения к комнате' });
@@ -164,16 +164,10 @@ io.on('connection', (socket) => {
     socket.on('toggle_ready', () => {
         try {
             const player = players.get(socket.id);
-            if (!player) {
-                socket.emit('error', { message: 'Игрок не найден' });
-                return;
-            }
+            if (!player) return;
             
             const room = rooms.get(player.roomCode);
-            if (!room) {
-                socket.emit('error', { message: 'Комната не найдена' });
-                return;
-            }
+            if (!room) return;
             
             player.ready = !player.ready;
             
@@ -182,7 +176,6 @@ io.on('connection', (socket) => {
             io.to(room.code).emit('players_update', room.players);
         } catch (error) {
             console.error('Error toggling ready:', error);
-            socket.emit('error', { message: 'Ошибка изменения статуса готовности' });
         }
     });
 
@@ -194,7 +187,15 @@ io.on('connection', (socket) => {
             const room = rooms.get(player.roomCode);
             if (!room) return;
             
+            // В первом круге можно раскрывать только профессию
+            if (room.currentRound === 1 && data.attribute !== 'profession') {
+                socket.emit('error', { message: 'В первом круге можно раскрывать только профессию' });
+                return;
+            }
+            
             player.revealed[data.attribute] = true;
+            
+            console.log(`🔓 Player ${player.username} revealed ${data.attribute}`);
             
             io.to(room.code).emit('attribute_revealed', {
                 playerId: player.id,
@@ -204,38 +205,27 @@ io.on('connection', (socket) => {
             io.to(room.code).emit('players_update', room.players);
         } catch (error) {
             console.error('Error revealing attribute:', error);
-            socket.emit('error', { message: 'Ошибка раскрытия характеристики' });
         }
     });
 
     socket.on('start_game', () => {
         try {
-            console.log('🚀 Received start_game request from socket:', socket.id);
+            console.log('🚀 Received start_game request');
             
             const player = players.get(socket.id);
             if (!player) {
-                console.log('❌ Player not found for socket:', socket.id);
                 socket.emit('error', { message: 'Игрок не найден' });
                 return;
             }
             
             const room = rooms.get(player.roomCode);
             if (!room) {
-                console.log('❌ Room not found for player:', player.username);
                 socket.emit('error', { message: 'Комната не найдена' });
                 return;
             }
             
-            console.log('🔍 Checking permissions:', {
-                playerId: player.id,
-                hostId: room.host,
-                isHost: player.id === room.host,
-                playerUsername: player.username
-            });
-            
             // Проверяем, является ли игрок хостом
             if (room.host !== player.id) {
-                console.log('❌ Player is not host:', player.username);
                 socket.emit('error', { message: 'Только создатель комнаты может начать игру' });
                 return;
             }
@@ -243,13 +233,6 @@ io.on('connection', (socket) => {
             // Проверяем, все ли игроки готовы
             const allReady = room.players.every(p => p.ready);
             const minPlayers = room.players.length >= 3;
-            
-            console.log('📊 Game start conditions:', {
-                allReady,
-                minPlayers,
-                playersCount: room.players.length,
-                players: room.players.map(p => ({ username: p.username, ready: p.ready }))
-            });
             
             if (!allReady) {
                 const notReadyPlayers = room.players.filter(p => !p.ready).map(p => p.username);
@@ -266,7 +249,7 @@ io.on('connection', (socket) => {
             room.gameStarted = true;
             room.currentRound = 1;
             
-            console.log(`🎮 Game started in room ${room.code} with ${room.players.length} players`);
+            console.log(`🎮 Game started in room ${room.code}`);
             
             io.to(room.code).emit('game_started');
         } catch (error) {
@@ -289,6 +272,15 @@ io.on('connection', (socket) => {
                 return;
             }
             
+            // Проверяем, что в первом круге все раскрыли профессию
+            if (room.currentRound === 1) {
+                const allRevealedProfession = room.players.every(p => p.revealed.profession);
+                if (!allRevealedProfession) {
+                    socket.emit('error', { message: 'Не все игроки раскрыли профессию' });
+                    return;
+                }
+            }
+            
             room.currentRound++;
             
             console.log(`🔄 Round ${room.currentRound} started in room ${room.code}`);
@@ -296,11 +288,140 @@ io.on('connection', (socket) => {
             io.to(room.code).emit('next_round', {
                 round: room.currentRound
             });
+            
+            // Если это 5-й круг, автоматически начинаем голосование
+            if (room.currentRound === 5) {
+                setTimeout(() => {
+                    startVoting(room);
+                }, 3000);
+            }
         } catch (error) {
             console.error('Error starting next round:', error);
-            socket.emit('error', { message: 'Ошибка перехода к следующему кругу' });
         }
     });
+
+    socket.on('start_voting', () => {
+        try {
+            const player = players.get(socket.id);
+            if (!player) return;
+            
+            const room = rooms.get(player.roomCode);
+            if (!room || !room.gameStarted) return;
+            
+            // Проверяем, является ли игрок хостом
+            if (room.host !== player.id) {
+                socket.emit('error', { message: 'Только создатель комнаты может начать голосование' });
+                return;
+            }
+            
+            startVoting(room);
+        } catch (error) {
+            console.error('Error starting voting:', error);
+        }
+    });
+
+    function startVoting(room) {
+        room.voting = true;
+        // Сбрасываем голоса
+        room.players.forEach(player => {
+            player.vote = null;
+        });
+        
+        console.log(`🗳️ Voting started in room ${room.code}`);
+        
+        io.to(room.code).emit('start_voting');
+    }
+
+    socket.on('cast_vote', (data) => {
+        try {
+            const player = players.get(socket.id);
+            if (!player) return;
+            
+            const room = rooms.get(player.roomCode);
+            if (!room || !room.voting) return;
+            
+            // Проверяем, что игрок не голосует за себя
+            if (data.targetPlayerId === player.id) {
+                socket.emit('error', { message: 'Нельзя голосовать за себя' });
+                return;
+            }
+            
+            // Проверяем, что целевой игрок существует
+            const targetPlayer = room.players.find(p => p.id === data.targetPlayerId);
+            if (!targetPlayer) {
+                socket.emit('error', { message: 'Игрок не найден' });
+                return;
+            }
+            
+            player.vote = data.targetPlayerId;
+            
+            console.log(`🗳️ Player ${player.username} voted for ${targetPlayer.username}`);
+            
+            // Проверяем, все ли проголосовали
+            checkVotingCompletion(room);
+        } catch (error) {
+            console.error('Error casting vote:', error);
+        }
+    });
+
+    function checkVotingCompletion(room) {
+        const allVoted = room.players.every(player => player.vote !== null);
+        
+        if (allVoted) {
+            console.log(`✅ All players voted in room ${room.code}`);
+            eliminatePlayer(room);
+        }
+    }
+
+    function eliminatePlayer(room) {
+        // Подсчитываем голоса
+        const voteCount = {};
+        room.players.forEach(player => {
+            if (player.vote) {
+                voteCount[player.vote] = (voteCount[player.vote] || 0) + 1;
+            }
+        });
+        
+        // Находим игрока с наибольшим количеством голосов
+        let maxVotes = 0;
+        let eliminatedPlayerId = null;
+        
+        Object.entries(voteCount).forEach(([playerId, votes]) => {
+            if (votes > maxVotes) {
+                maxVotes = votes;
+                eliminatedPlayerId = playerId;
+            }
+        });
+        
+        if (eliminatedPlayerId) {
+            const eliminatedPlayer = room.players.find(p => p.id === eliminatedPlayerId);
+            
+            // Удаляем игрока из комнаты
+            room.players = room.players.filter(p => p.id !== eliminatedPlayerId);
+            
+            // Завершаем голосование
+            room.voting = false;
+            
+            console.log(`👋 Player ${eliminatedPlayer.username} eliminated from room ${room.code}`);
+            
+            io.to(room.code).emit('player_eliminated', {
+                playerId: eliminatedPlayerId,
+                username: eliminatedPlayer.username,
+                voteCount: maxVotes
+            });
+
+            io.to(room.code).emit('players_update', room.players);
+            
+            // Если осталось 3 игрока или меньше - игра завершается
+            if (room.players.length <= 3) {
+                setTimeout(() => {
+                    io.to(room.code).emit('game_ended', {
+                        winners: room.players.map(p => p.username)
+                    });
+                }, 3000);
+            }
+        }
+    }
 
     socket.on('chat_message', (data) => {
         try {
@@ -320,26 +441,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('cast_vote', (data) => {
-        try {
-            const player = players.get(socket.id);
-            if (!player) return;
-            
-            const room = rooms.get(player.roomCode);
-            if (!room) return;
-            
-            player.vote = data.targetPlayerId;
-            
-            io.to(room.code).emit('player_voted', {
-                playerId: player.id,
-                targetPlayerId: data.targetPlayerId
-            });
-        } catch (error) {
-            console.error('Error casting vote:', error);
-            socket.emit('error', { message: 'Ошибка голосования' });
-        }
-    });
-
     socket.on('leave_room', () => {
         try {
             const player = players.get(socket.id);
@@ -355,12 +456,11 @@ io.on('connection', (socket) => {
             
             if (room.players.length === 0) {
                 rooms.delete(room.code);
-                console.log(`🗑️ Room ${room.code} deleted (no players left)`);
+                console.log(`🗑️ Room ${room.code} deleted`);
             } else {
                 if (room.host === player.id) {
                     room.host = room.players[0].id;
                     room.players[0].isHost = true;
-                    console.log(`👑 New host assigned: ${room.players[0].username}`);
                 }
                 
                 io.to(room.code).emit('player_left', {
@@ -368,7 +468,6 @@ io.on('connection', (socket) => {
                 });
 
                 io.to(room.code).emit('players_update', room.players);
-                console.log(`👋 Player ${playerUsername} left room ${room.code}, remaining: ${room.players.length}`);
             }
             
             socket.leave(room.code);
@@ -379,8 +478,6 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', () => {
         try {
-            console.log('🔌 Player disconnected:', socket.id);
-            
             const player = players.get(socket.id);
             if (!player) return;
             
@@ -394,12 +491,10 @@ io.on('connection', (socket) => {
             
             if (room.players.length === 0) {
                 rooms.delete(room.code);
-                console.log(`🗑️ Room ${room.code} deleted (no players left after disconnect)`);
             } else {
                 if (room.host === player.id) {
                     room.host = room.players[0].id;
                     room.players[0].isHost = true;
-                    console.log(`👑 New host assigned after disconnect: ${room.players[0].username}`);
                 }
                 
                 io.to(room.code).emit('player_left', {
@@ -407,7 +502,6 @@ io.on('connection', (socket) => {
                 });
 
                 io.to(room.code).emit('players_update', room.players);
-                console.log(`👋 Player ${playerUsername} disconnected from room ${room.code}, remaining: ${room.players.length}`);
             }
         } catch (error) {
             console.error('Error handling disconnect:', error);
@@ -418,5 +512,4 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`🎯 Server running on port ${PORT}`);
-    console.log(`📊 Current rooms: ${rooms.size}`);
 });
