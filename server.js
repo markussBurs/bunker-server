@@ -15,9 +15,11 @@ const io = socketIo(server, {
 app.use(cors());
 app.use(express.json());
 
+// Хранилище данных в памяти
 const rooms = new Map();
 const players = new Map();
 
+// Генерация ID
 function generateId() {
     return Math.random().toString(36).substr(2, 9);
 }
@@ -26,6 +28,7 @@ function generateRoomCode() {
     return 'BUNK' + Math.floor(1000 + Math.random() * 9000);
 }
 
+// Данные для генерации характеристик
 const gameData = {
     professions: ["Врач", "Инженер", "Ученый", "Солдат", "Фермер", "Повар", "Учитель", "Строитель"],
     healthConditions: ["Здоров", "Легкое заболевание", "Хроническое заболевание", "Инвалидность"],
@@ -71,6 +74,36 @@ function generatePlayer(username, isHost = false) {
     };
 }
 
+// Вспомогательные функции для логики кругов
+function getRoundAttributes(round) {
+    const roundAttributes = {
+        1: ['profession'], // Круг 1 - только профессия (обязательно)
+        2: ['health', 'biology', 'hobby', 'luggage', 'phobia', 'character', 'additionalInfo'], // Круги 2-5 - любую одну
+        3: ['health', 'biology', 'hobby', 'luggage', 'phobia', 'character', 'additionalInfo'],
+        4: ['health', 'biology', 'hobby', 'luggage', 'phobia', 'character', 'additionalInfo'],
+        5: ['health', 'biology', 'hobby', 'luggage', 'phobia', 'character', 'additionalInfo']
+    };
+    return roundAttributes[round] || [];
+}
+
+function wasRevealedInPreviousRounds(player, attribute, currentRound) {
+    for (let i = 1; i < currentRound; i++) {
+        const roundAttrs = getRoundAttributes(i);
+        if (roundAttrs.includes(attribute) && player.revealed[attribute]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function getRevealedCountThisRound(player, currentRound) {
+    const currentRoundAttrs = getRoundAttributes(currentRound);
+    return currentRoundAttrs.filter(attr => 
+        player.revealed[attr] && !wasRevealedInPreviousRounds(player, attr, currentRound)
+    ).length;
+}
+
+// Socket.IO соединения
 io.on('connection', (socket) => {
     console.log('Новый игрок:', socket.id);
 
@@ -124,6 +157,7 @@ io.on('connection', (socket) => {
                 return;
             }
             
+            // Проверяем, нет ли уже игрока с таким именем
             const existingPlayer = room.players.find(p => p.username === username);
             if (existingPlayer) {
                 socket.emit('error', { message: 'Игрок с таким именем уже есть в комнате' });
@@ -182,14 +216,31 @@ io.on('connection', (socket) => {
             const room = rooms.get(player.roomCode);
             if (!room) return;
             
+            // В первом круге можно раскрывать только профессию
             if (room.currentRound === 1 && data.attribute !== 'profession') {
                 socket.emit('error', { message: 'В первом круге можно раскрывать только профессию' });
                 return;
             }
             
+            // Проверяем, не раскрывал ли уже игрок в этом круге
+            if (room.currentRound > 1) {
+                const revealedThisRound = getRevealedCountThisRound(player, room.currentRound);
+                if (revealedThisRound >= 1) {
+                    socket.emit('error', { message: 'Вы уже раскрыли одну характеристику в этом круге' });
+                    return;
+                }
+            }
+            
+            // Проверяем, можно ли раскрывать эту характеристику в текущем круге
+            const currentRoundAttrs = getRoundAttributes(room.currentRound);
+            if (!currentRoundAttrs.includes(data.attribute)) {
+                socket.emit('error', { message: 'Эту характеристику нельзя раскрыть в текущем круге' });
+                return;
+            }
+            
             player.revealed[data.attribute] = true;
             
-            console.log(`🔓 Player ${player.username} revealed ${data.attribute}`);
+            console.log(`🔓 Player ${player.username} revealed ${data.attribute} in round ${room.currentRound}`);
             
             io.to(room.code).emit('attribute_revealed', {
                 playerId: player.id,
@@ -218,11 +269,13 @@ io.on('connection', (socket) => {
                 return;
             }
             
+            // Проверяем, является ли игрок хостом
             if (room.host !== player.id) {
                 socket.emit('error', { message: 'Только создатель комнаты может начать игру' });
                 return;
             }
             
+            // Проверяем, все ли игроки готовы
             const allReady = room.players.every(p => p.ready);
             const minPlayers = room.players.length >= 3;
             
@@ -237,6 +290,7 @@ io.on('connection', (socket) => {
                 return;
             }
             
+            // Запускаем игру
             room.gameStarted = true;
             room.currentRound = 1;
             
@@ -257,17 +311,36 @@ io.on('connection', (socket) => {
             const room = rooms.get(player.roomCode);
             if (!room || !room.gameStarted) return;
             
+            // Проверяем, является ли игрок хостом
             if (room.host !== player.id) {
                 socket.emit('error', { message: 'Только создатель комнаты может переходить к следующему кругу' });
                 return;
             }
             
+            // Проверяем условия для перехода
             if (room.currentRound === 1) {
+                // В первом круге все должны раскрыть профессию
                 const allRevealedProfession = room.players.every(p => p.revealed.profession);
                 if (!allRevealedProfession) {
-                    socket.emit('error', { message: 'Не все игроки раскрыли профессию' });
+                    const notRevealedPlayers = room.players.filter(p => !p.revealed.profession).map(p => p.username);
+                    socket.emit('error', { message: `Не все игроки раскрыли профессию: ${notRevealedPlayers.join(', ')}` });
                     return;
                 }
+            } else if (room.currentRound >= 2 && room.currentRound <= 4) {
+                // В кругах 2-4 все должны раскрыть хотя бы одну характеристику
+                const allRevealedOne = room.players.every(p => 
+                    getRevealedCountThisRound(p, room.currentRound) >= 1
+                );
+                if (!allRevealedOne) {
+                    const notRevealedPlayers = room.players.filter(p => 
+                        getRevealedCountThisRound(p, room.currentRound) === 0
+                    ).map(p => p.username);
+                    socket.emit('error', { message: `Не все игроки раскрыли по одной характеристике в этом круге: ${notRevealedPlayers.join(', ')}` });
+                    return;
+                }
+            } else if (room.currentRound === 5) {
+                socket.emit('error', { message: 'Достигнут максимальный номер круга' });
+                return;
             }
             
             room.currentRound++;
@@ -278,6 +351,7 @@ io.on('connection', (socket) => {
                 round: room.currentRound
             });
             
+            // Если это 5-й круг, автоматически начинаем голосование
             if (room.currentRound === 5) {
                 setTimeout(() => {
                     startVoting(room);
@@ -296,6 +370,7 @@ io.on('connection', (socket) => {
             const room = rooms.get(player.roomCode);
             if (!room || !room.gameStarted) return;
             
+            // Проверяем, является ли игрок хостом
             if (room.host !== player.id) {
                 socket.emit('error', { message: 'Только создатель комнаты может начать голосование' });
                 return;
@@ -309,6 +384,7 @@ io.on('connection', (socket) => {
 
     function startVoting(room) {
         room.voting = true;
+        // Сбрасываем голоса
         room.players.forEach(player => {
             player.vote = null;
         });
@@ -326,11 +402,13 @@ io.on('connection', (socket) => {
             const room = rooms.get(player.roomCode);
             if (!room || !room.voting) return;
             
+            // Проверяем, что игрок не голосует за себя
             if (data.targetPlayerId === player.id) {
                 socket.emit('error', { message: 'Нельзя голосовать за себя' });
                 return;
             }
             
+            // Проверяем, что целевой игрок существует
             const targetPlayer = room.players.find(p => p.id === data.targetPlayerId);
             if (!targetPlayer) {
                 socket.emit('error', { message: 'Игрок не найден' });
@@ -341,6 +419,7 @@ io.on('connection', (socket) => {
             
             console.log(`🗳️ Player ${player.username} voted for ${targetPlayer.username}`);
             
+            // Проверяем, все ли проголосовали
             checkVotingCompletion(room);
         } catch (error) {
             console.error('Error casting vote:', error);
@@ -357,6 +436,7 @@ io.on('connection', (socket) => {
     }
 
     function eliminatePlayer(room) {
+        // Подсчитываем голоса
         const voteCount = {};
         room.players.forEach(player => {
             if (player.vote) {
@@ -364,6 +444,7 @@ io.on('connection', (socket) => {
             }
         });
         
+        // Находим игрока с наибольшим количеством голосов
         let maxVotes = 0;
         let eliminatedPlayerId = null;
         
@@ -377,7 +458,10 @@ io.on('connection', (socket) => {
         if (eliminatedPlayerId) {
             const eliminatedPlayer = room.players.find(p => p.id === eliminatedPlayerId);
             
+            // Удаляем игрока из комнаты
             room.players = room.players.filter(p => p.id !== eliminatedPlayerId);
+            
+            // Завершаем голосование
             room.voting = false;
             
             console.log(`👋 Player ${eliminatedPlayer.username} eliminated from room ${room.code}`);
@@ -390,11 +474,13 @@ io.on('connection', (socket) => {
 
             io.to(room.code).emit('players_update', room.players);
             
+            // Если осталось 3 игрока или меньше - игра завершается
             if (room.players.length <= 3) {
                 setTimeout(() => {
                     io.to(room.code).emit('game_ended', {
                         winners: room.players.map(p => p.username)
                     });
+                    console.log(`🎉 Game ended in room ${room.code}. Winners: ${room.players.map(p => p.username).join(', ')}`);
                 }, 3000);
             }
         }
@@ -438,6 +524,7 @@ io.on('connection', (socket) => {
                 if (room.host === player.id) {
                     room.host = room.players[0].id;
                     room.players[0].isHost = true;
+                    console.log(`👑 New host assigned: ${room.players[0].username}`);
                 }
                 
                 io.to(room.code).emit('player_left', {
@@ -445,6 +532,7 @@ io.on('connection', (socket) => {
                 });
 
                 io.to(room.code).emit('players_update', room.players);
+                console.log(`👋 Player ${playerUsername} left room ${room.code}`);
             }
             
             socket.leave(room.code);
@@ -455,6 +543,8 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', () => {
         try {
+            console.log('🔌 Player disconnected:', socket.id);
+            
             const player = players.get(socket.id);
             if (!player) return;
             
@@ -468,10 +558,12 @@ io.on('connection', (socket) => {
             
             if (room.players.length === 0) {
                 rooms.delete(room.code);
+                console.log(`🗑️ Room ${room.code} deleted (no players left)`);
             } else {
                 if (room.host === player.id) {
                     room.host = room.players[0].id;
                     room.players[0].isHost = true;
+                    console.log(`👑 New host assigned after disconnect: ${room.players[0].username}`);
                 }
                 
                 io.to(room.code).emit('player_left', {
@@ -479,6 +571,7 @@ io.on('connection', (socket) => {
                 });
 
                 io.to(room.code).emit('players_update', room.players);
+                console.log(`👋 Player ${playerUsername} disconnected from room ${room.code}`);
             }
         } catch (error) {
             console.error('Error handling disconnect:', error);
