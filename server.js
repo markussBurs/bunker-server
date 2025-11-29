@@ -70,7 +70,8 @@ function generatePlayer(username, isHost = false) {
             character: false,
             additionalInfo: false
         },
-        vote: null
+        vote: null,
+        hasRevealedThisRound: false // Флаг для отслеживания раскрытия в текущем круге
     };
 }
 
@@ -101,6 +102,13 @@ function getRevealedCountThisRound(player, currentRound) {
     return currentRoundAttrs.filter(attr => 
         player.revealed[attr] && !wasRevealedInPreviousRounds(player, attr, currentRound)
     ).length;
+}
+
+function canRevealAttribute(player, attribute, currentRound) {
+    if (player.hasRevealedThisRound) return false;
+    
+    const currentRoundAttributes = getRoundAttributes(currentRound);
+    return currentRoundAttributes.includes(attribute) && !player.revealed[attribute];
 }
 
 // Socket.IO соединения
@@ -216,29 +224,14 @@ io.on('connection', (socket) => {
             const room = rooms.get(player.roomCode);
             if (!room) return;
             
-            // В первом круге можно раскрывать только профессию
-            if (room.currentRound === 1 && data.attribute !== 'profession') {
-                socket.emit('error', { message: 'В первом круге можно раскрывать только профессию' });
-                return;
-            }
-            
-            // Проверяем, не раскрывал ли уже игрок в этом круге
-            if (room.currentRound > 1) {
-                const revealedThisRound = getRevealedCountThisRound(player, room.currentRound);
-                if (revealedThisRound >= 1) {
-                    socket.emit('error', { message: 'Вы уже раскрыли одну характеристику в этом круге' });
-                    return;
-                }
-            }
-            
             // Проверяем, можно ли раскрывать эту характеристику в текущем круге
-            const currentRoundAttrs = getRoundAttributes(room.currentRound);
-            if (!currentRoundAttrs.includes(data.attribute)) {
-                socket.emit('error', { message: 'Эту характеристику нельзя раскрыть в текущем круге' });
+            if (!canRevealAttribute(player, data.attribute, room.currentRound)) {
+                socket.emit('error', { message: 'Нельзя раскрыть эту характеристику в текущем круге или вы уже раскрыли характеристику в этом круге' });
                 return;
             }
             
             player.revealed[data.attribute] = true;
+            player.hasRevealedThisRound = true;
             
             console.log(`🔓 Player ${player.username} revealed ${data.attribute} in round ${room.currentRound}`);
             
@@ -294,6 +287,11 @@ io.on('connection', (socket) => {
             room.gameStarted = true;
             room.currentRound = 1;
             
+            // Сбрасываем флаги раскрытия для всех игроков
+            room.players.forEach(p => {
+                p.hasRevealedThisRound = false;
+            });
+            
             console.log(`🎮 Game started in room ${room.code}`);
             
             io.to(room.code).emit('game_started');
@@ -344,6 +342,11 @@ io.on('connection', (socket) => {
             }
             
             room.currentRound++;
+            
+            // Сбрасываем флаги раскрытия для всех игроков при переходе на новый круг
+            room.players.forEach(p => {
+                p.hasRevealedThisRound = false;
+            });
             
             console.log(`🔄 Round ${room.currentRound} started in room ${room.code}`);
             
