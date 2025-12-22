@@ -10,9 +10,8 @@ const PORT = process.env.PORT || 5000;
 
 // Настройка CORS для GitHub Pages
 const allowedOrigins = [
-  'https://ваш-username.github.io',
-  'http://localhost:5173',
-  'http://localhost:3000'
+  'https://markussBurs.github.io',
+  'https://markussBurs.github.io/bunker-game-frontend'
 ];
 
 const io = new Server(server, {
